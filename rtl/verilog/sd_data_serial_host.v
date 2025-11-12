@@ -47,6 +47,7 @@
 ////                                                              ////
 //////////////////////////////////////////////////////////////////////
 `include "sd_defines.h"
+`include "sdc_controller.vh"
 
 module sd_data_serial_host(
            input sd_clk,
@@ -71,6 +72,12 @@ module sd_data_serial_host(
            output busy,
            output reg crc_ok
        );
+
+`ifdef ALTERA_DCFIFO
+localparam TXFIFO_RD_DELAY = 1;
+`else
+localparam TXFIFO_RD_DELAY = 2;
+`endif
 
 reg [3:0] DAT_dat_reg;
 reg [`BLKSIZE_W-1+3:0] data_cycles;
@@ -195,7 +202,7 @@ begin: FSM_OUT
         blksize_reg <= 0;
         byte_alignment_reg <= 0;
         data_cycles <= 0;
-        bus_4bit_reg <= 0;      
+        bus_4bit_reg <= 0;
     end
     else begin
         state <= next_state;
@@ -233,15 +240,15 @@ begin: FSM_OUT
                     crc_en <= 1;
                     if (bus_4bit_reg) begin
                         last_din <= {
-                            data_in[31-(byte_alignment_reg << 3)], 
-                            data_in[30-(byte_alignment_reg << 3)], 
-                            data_in[29-(byte_alignment_reg << 3)], 
+                            data_in[31-(byte_alignment_reg << 3)],
+                            data_in[30-(byte_alignment_reg << 3)],
+                            data_in[29-(byte_alignment_reg << 3)],
                             data_in[28-(byte_alignment_reg << 3)]
                             };
                         crc_in <= {
-                            data_in[31-(byte_alignment_reg << 3)], 
-                            data_in[30-(byte_alignment_reg << 3)], 
-                            data_in[29-(byte_alignment_reg << 3)], 
+                            data_in[31-(byte_alignment_reg << 3)],
+                            data_in[30-(byte_alignment_reg << 3)],
+                            data_in[29-(byte_alignment_reg << 3)],
                             data_in[28-(byte_alignment_reg << 3)]
                             };
                     end
@@ -257,25 +264,25 @@ begin: FSM_OUT
                     DAT_oe_o<=1;
                     if (bus_4bit_reg) begin
                         last_din <= {
-                            data_in[31-(data_index[2:0]<<2)], 
-                            data_in[30-(data_index[2:0]<<2)], 
-                            data_in[29-(data_index[2:0]<<2)], 
+                            data_in[31-(data_index[2:0]<<2)],
+                            data_in[30-(data_index[2:0]<<2)],
+                            data_in[29-(data_index[2:0]<<2)],
                             data_in[28-(data_index[2:0]<<2)]
                             };
                         crc_in <= {
-                            data_in[31-(data_index[2:0]<<2)], 
-                            data_in[30-(data_index[2:0]<<2)], 
-                            data_in[29-(data_index[2:0]<<2)], 
+                            data_in[31-(data_index[2:0]<<2)],
+                            data_in[30-(data_index[2:0]<<2)],
+                            data_in[29-(data_index[2:0]<<2)],
                             data_in[28-(data_index[2:0]<<2)]
                             };
-                        if (data_index[2:0] == 3'h5/*not 7 - read delay !!!*/ && transf_cnt <= data_cycles-1) begin
+                        if (data_index[2:0] == (3'h7-TXFIFO_RD_DELAY) /*not 7 - read delay !!!*/ && transf_cnt <= data_cycles-1) begin
                             rd <= 1;
                         end
                     end
                     else begin
                         last_din <= {3'h7, data_in[31-data_index]};
                         crc_in <= {3'h7, data_in[31-data_index]};
-                        if (data_index == 29/*not 31 - read delay !!!*/) begin
+                        if (data_index == (31-TXFIFO_RD_DELAY) /*not 31 - read delay !!!*/) begin
                             rd <= 1;
                         end
                     end

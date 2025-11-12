@@ -108,7 +108,7 @@ aw	Address bus width (Determines the FIFO size by evaluating 2^aw)
 Synthesis Results
 -----------------
 In a Spartan 2e a 8 bit wide, 8 entries deep FIFO, takes 97 LUTs and runs
-at about 113 MHz (IO insertion disabled). 
+at about 113 MHz (IO insertion disabled).
 
 Misc
 ----
@@ -119,6 +119,7 @@ empty will place the FIFO in an undefined state.
 
 */
 
+`include "sdc_controller.vh"
 
 module generic_fifo_dc_gray(	rd_clk, wr_clk, rst, clr, din, we,
 		dout, re, full, empty, wr_level, rd_level );
@@ -131,11 +132,43 @@ input	[dw-1:0]	din;
 input			we;
 output	[dw-1:0]	dout;
 input			re;
-output			full; 
+output			full;
 output			empty;
-output	[1:0]		wr_level;
-output	[1:0]		rd_level;
+output	[(aw-1):0]		wr_level;
+output	[(aw-1):0]		rd_level;
 
+
+`ifdef ALTERA_DCFIFO
+dcfifo dcfifo_component (
+            .data (din),
+            .rdclk (rd_clk),
+            .rdreq (re),
+            .wrclk (wr_clk),
+            .wrreq (we),
+            .q (dout),
+            .rdempty (empty),
+            .rdusedw (rd_level),
+            .wrfull (full),
+            .aclr (!rst),
+            .eccstatus (),
+            .rdfull (),
+            .wrempty (),
+            .wrusedw (wr_level));
+defparam
+    dcfifo_component.intended_device_family = "Cyclone V",
+    dcfifo_component.lpm_numwords = (2**aw),
+    dcfifo_component.lpm_showahead = "ON",
+    dcfifo_component.lpm_type = "dcfifo",
+    dcfifo_component.lpm_width = dw,
+    dcfifo_component.lpm_widthu = aw,
+    dcfifo_component.overflow_checking = "ON",
+    dcfifo_component.rdsync_delaypipe = 4,
+    dcfifo_component.underflow_checking = "ON",
+    dcfifo_component.use_eab = "ON",
+    dcfifo_component.read_aclr_synch = "OFF",
+    dcfifo_component.write_aclr_synch = "OFF",
+    dcfifo_component.wrsync_delaypipe = 4;
+`else
 ////////////////////////////////////////////////////////////////////
 //
 // Local Wires
@@ -223,6 +256,7 @@ generic_dpram  #(aw,dw) u0(
 // Read/Write Pointers Logic
 //
 
+`ifdef WRRST_SYNC_CIRCUITRY
 always @(posedge wr_clk)
 	if(!wr_rst)	wp_bin <= {aw+1{1'b0}};
 	else
@@ -236,10 +270,27 @@ always @(posedge wr_clk)
 	if(wr_clr)	wp_gray <= {aw+1{1'b0}};
 	else
 	if(we)		wp_gray <= wp_gray_next;
+`else
+always @(posedge wr_clk or negedge rst) begin
+    if (!rst) begin
+        wp_bin <= {aw+1{1'b0}};
+        wp_gray <= {aw+1{1'b0}};
+    end else begin
+        if (wr_clr) begin
+            wp_bin <= {aw+1{1'b0}};
+            wp_gray <= {aw+1{1'b0}};
+        end else if (we) begin
+            wp_bin <= wp_bin_next;
+            wp_gray <= wp_gray_next;
+        end
+    end
+end
+`endif
 
 assign wp_bin_next  = wp_bin + {{aw{1'b0}},1'b1};
 assign wp_gray_next = wp_bin_next ^ {1'b0, wp_bin_next[aw:1]};
 
+`ifdef RDRST_SYNC_CIRCUITRY
 always @(posedge rd_clk)
 	if(!rd_rst)	rp_bin <= {aw+1{1'b0}};
 	else
@@ -253,6 +304,22 @@ always @(posedge rd_clk)
 	if(rd_clr)	rp_gray <= {aw+1{1'b0}};
 	else
 	if(re)		rp_gray <= rp_gray_next;
+`else
+always @(posedge rd_clk or negedge rst) begin
+    if (!rst) begin
+        rp_bin <= {aw+1{1'b0}};
+        rp_gray <= {aw+1{1'b0}};
+    end else begin
+        if (rd_clr) begin
+            rp_bin <= {aw+1{1'b0}};
+            rp_gray <= {aw+1{1'b0}};
+        end else if (re) begin
+            rp_bin <= rp_bin_next;
+            rp_gray <= rp_gray_next;
+        end
+    end
+end
+`endif
 
 assign rp_bin_next  = rp_bin + {{aw{1'b0}},1'b1};
 assign rp_gray_next = rp_bin_next ^ {1'b0, rp_bin_next[aw:1]};
@@ -304,6 +371,7 @@ always @(posedge rd_clk)	d2 <= rp_bin[aw-1:0] + wp_bin_xr[aw-1:0];
 
 always @(posedge rd_clk)	full_rc <= full;
 always @(posedge rd_clk)	rd_level <= full_rc ? 2'h0 : {d2[aw-1] | empty, d2[aw-2] | empty};
+`endif
 
 ////////////////////////////////////////////////////////////////////
 //
@@ -321,4 +389,3 @@ always @(posedge rd_clk)	rd_level <= full_rc ? 2'h0 : {d2[aw-1] | empty, d2[aw-2
 // synopsys translate_on
 
 endmodule
-

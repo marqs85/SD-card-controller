@@ -151,6 +151,7 @@ wire start_tx_fifo;
 wire start_rx_fifo;
 wire tx_fifo_empty;
 wire tx_fifo_full;
+wire rx_fifo_empty;
 wire rx_fifo_full;
 wire sd_data_busy;
 wire data_busy;
@@ -260,14 +261,14 @@ sd_data_master sd_data_master0(
                        software_reset_reg_sd_clk[0]),
     .start_tx_i       (data_start_tx),
     .start_rx_i       (data_start_rx),
-    .timeout_i		  (data_timeout_reg_sd_clk),
+    .timeout_i        (data_timeout_reg_sd_clk),
     .d_write_o        (d_write),
     .d_read_o         (d_read),
     .start_tx_fifo_o  (start_tx_fifo),
     .start_rx_fifo_o  (start_rx_fifo),
-    .tx_fifo_empty_i  (tx_fifo_empty),
+    .tx_fifo_underflow_i (tx_fifo_empty & rd_fifo),
     .tx_fifo_full_i   (tx_fifo_full),
-    .rx_fifo_full_i   (rx_fifo_full),
+    .rx_fifo_overflow_i  (rx_fifo_full & we_fifo),
     .xfr_complete_i   (!data_busy),
     .crc_ok_i         (data_crc_ok),
     .int_status_o     (data_int_status_reg_sd_clk),
@@ -307,6 +308,7 @@ sd_fifo_filler sd_fifo_filler0(
     .en_rx_i   (start_rx_fifo),
     .en_tx_i   (start_tx_fifo),
     .adr_i     (dma_addr_reg_wb_clk),
+    .xfersize  (xfersize),
     .sd_clk    (sd_clk_o),
     .dat_i     (data_in_rx_fifo),
     .dat_o     (data_out_tx_fifo),
@@ -314,7 +316,7 @@ sd_fifo_filler sd_fifo_filler0(
     .rd_i      (rd_fifo),
     .sd_empty_o   (tx_fifo_empty),
     .sd_full_o   (rx_fifo_full),
-    .wb_empty_o   (),
+    .wb_empty_o   (rx_fifo_empty),
     .wb_full_o    (tx_fifo_full)
     );
 

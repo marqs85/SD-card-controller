@@ -60,9 +60,9 @@ module sd_data_master (
            //To fifo filler
            output reg start_tx_fifo_o,
            output reg start_rx_fifo_o,
-           input tx_fifo_empty_i,
+           input tx_fifo_underflow_i,
            input tx_fifo_full_i,
-           input rx_fifo_full_i,
+           input rx_fifo_overflow_i,
            //TODO: should be dependent on rx_fifo_empty_i signal (wishbone read all data case)
            //SD-DATA_Host
            input xfr_complete_i,
@@ -175,39 +175,7 @@ begin
                 d_read_o <= 0;
                 d_write_o <= 0;
                 watchdog <= watchdog + `DATA_TIMEOUT_W'd1;
-                if (tx_cycle) begin
-                    if (tx_fifo_empty_i) begin
-                        if (!trans_done) begin
-                            int_status_o[`INT_DATA_CFE] <= 1;
-                            int_status_o[`INT_DATA_EI] <= 1;
-                        end
-                        trans_done <= 1;
-                        //stop sd_data_serial_host
-                        d_write_o <= 1;
-                        d_read_o <= 1;
-                    end
-                end
-                else begin
-                    if (rx_fifo_full_i) begin
-                        if (!trans_done) begin
-                            int_status_o[`INT_DATA_CFE] <= 1;
-                            int_status_o[`INT_DATA_EI] <= 1;
-                        end
-                        trans_done <= 1;
-                        //stop sd_data_serial_host
-                        d_write_o <= 1;
-                        d_read_o <= 1;
-                    end
-                end
-                if (|timeout_reg && watchdog >= timeout_reg) begin
-                    int_status_o[`INT_DATA_CTE] <= 1;
-                    int_status_o[`INT_DATA_EI] <= 1;
-                    trans_done <= 1;
-                    //stop sd_data_serial_host
-                    d_write_o <= 1;
-                    d_read_o <= 1;
-                end
-                else if (xfr_complete_i) begin //Transfer complete
+                if (xfr_complete_i) begin //Transfer complete
                     d_write_o <= 0;
                     d_read_o <= 0;
                     trans_done <= 1;
@@ -216,10 +184,28 @@ begin
                             int_status_o[`INT_DATA_CCRCE] <= 1;
                             int_status_o[`INT_DATA_EI] <= 1;
                         end
-                    end
-                    else if (crc_ok_i) begin //Data Line free
+                    end else begin //Data Line free
                         if (!trans_done)
                             int_status_o[`INT_DATA_CC] <= 1;
+                    end
+                end else begin //Check error conditions
+                    if ((tx_cycle & tx_fifo_underflow_i) | (!tx_cycle & rx_fifo_overflow_i)) begin
+                        if (!trans_done) begin
+                            int_status_o[`INT_DATA_CFE] <= 1;
+                            int_status_o[`INT_DATA_EI] <= 1;
+                        end
+                        trans_done <= 1;
+                        //stop sd_data_serial_host
+                        d_write_o <= 1;
+                        d_read_o <= 1;
+                    end
+                    else if (|timeout_reg && watchdog >= timeout_reg) begin
+                        int_status_o[`INT_DATA_CTE] <= 1;
+                        int_status_o[`INT_DATA_EI] <= 1;
+                        trans_done <= 1;
+                        //stop sd_data_serial_host
+                        d_write_o <= 1;
+                        d_read_o <= 1;
                     end
                 end
             end
