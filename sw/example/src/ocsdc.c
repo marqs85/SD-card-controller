@@ -40,12 +40,10 @@
  */
 
 #include "mmc.h"
-#include <malloc.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <or1k-support.h>
 
 // Register space
 #define OCSDC_ARGUMENT           0x00
@@ -54,8 +52,9 @@
 #define OCSDC_RESPONSE_2         0x0c
 #define OCSDC_RESPONSE_3         0x10
 #define OCSDC_RESPONSE_4         0x14
-#define OCSDC_CONTROL 			 0x1C
-#define OCSDC_TIMEOUT            0x20
+#define OCSDC_DAT_TIMEOUT        0x18
+#define OCSDC_CONTROL            0x1C
+#define OCSDC_CMD_TIMEOUT        0x20
 #define OCSDC_CLOCK_DIVIDER      0x24
 #define OCSDC_SOFTWARE_RESET     0x28
 #define OCSDC_POWER_CONTROL      0x2C
@@ -68,31 +67,36 @@
 #define OCSDC_BLOCK_COUNT        0x48
 #define OCSDC_DST_SRC_ADDR       0x60
 
-// OCSDC_CMD_INT_STATUS bits
-#define OCSDC_CMD_INT_STATUS_CC   0x0001
-#define OCSDC_CMD_INT_STATUS_EI   0x0002
-#define OCSDC_CMD_INT_STATUS_CTE  0x0004
-#define OCSDC_CMD_INT_STATUS_CCRC 0x0008
-#define OCSDC_CMD_INT_STATUS_CIE  0x0010
+// OCSDC_INT_STATUS bits
+#define OCSDC_INT_STATUS_CC   0x0001
+#define OCSDC_INT_STATUS_EI   0x0002
+#define OCSDC_INT_STATUS_CTE  0x0004
+#define OCSDC_INT_STATUS_CCRC 0x0008
+#define OCSDC_INT_STATUS_CIE  0x0010
 
-// SDCMSC_DAT_INT_STATUS
-#define SDCMSC_DAT_INT_STATUS_TRS 0x01
-#define SDCMSC_DAT_INT_STATUS_CRC 0x02
-#define SDCMSC_DAT_INT_STATUS_OV  0x04
+#ifndef OCSDC_DEBUG
+#define DBG_PRINTF(...)
+#else
+extern int dd_printf(const char *__restrict fmt, ...);
+#define DBG_PRINTF dd_printf
+#endif
 
 struct ocsdc {
 	int iobase;
 	int clk_freq;
 };
 
+struct mmc mmc;
+struct ocsdc priv;
+
 #define readl(addr) (*(volatile unsigned int *) (addr))
 #define writel(b, addr) ((*(volatile unsigned int *) (addr)) = (b))
 
 void flush_dcache_range(void * start, void * end) {
-	while (start < end) {
+	/*while (start < end) {
 		or1k_dcache_flush((unsigned long)start);
 		start += 4;
-	}
+	}*/
 }
 
 static inline uint32_t ocsdc_read(struct ocsdc *dev, int offset)
@@ -115,9 +119,9 @@ static void ocsdc_set_buswidth(struct ocsdc * dev, uint width) {
 /* Set clock prescalar value based on the required clock in HZ */
 static void ocsdc_set_clock(struct ocsdc * dev, uint clock)
 {
-	int clk_div = dev->clk_freq / (2.0 * clock) - 1;
+	int clk_div = dev->clk_freq / (2 * clock) - 1;
 
-	printf("ocsdc_set_clock %d, div %d\n\r", clock, clk_div);
+	DBG_PRINTF("ocsdc_set_clock %d, div %d\n\r", clock, clk_div);
 	//software reset
 	ocsdc_write(dev, OCSDC_SOFTWARE_RESET, 1);
 	//set clock devider
@@ -131,15 +135,15 @@ static int ocsdc_finish(struct ocsdc * dev, struct mmc_cmd *cmd) {
 	int retval = 0;
 	while (1) {
 		int r2 = ocsdc_read(dev, OCSDC_CMD_INT_STATUS);
-		//printf("ocsdc_finish: cmd %d, status %x\n", cmd->cmdidx, r2);
-		if (r2 & OCSDC_CMD_INT_STATUS_EI) {
+		//DBG_PRINTF("ocsdc_finish: cmd %d, status %x\n", cmd->cmdidx, r2);
+		if (r2 & OCSDC_INT_STATUS_EI) {
 			//clear interrupts
 			ocsdc_write(dev, OCSDC_CMD_INT_STATUS, 0);
-			printf("ocsdc_finish: cmd %d, status %x\n\r", cmd->cmdidx, r2);
+			DBG_PRINTF("ocsdc_finish: cmd %d, status %x\n\r", cmd->cmdidx, r2);
 			retval = -1;
 			break;
 		}
-		else if (r2 & OCSDC_CMD_INT_STATUS_CC) {
+		else if (r2 & OCSDC_INT_STATUS_CC) {
 			//clear interrupts
 			ocsdc_write(dev, OCSDC_CMD_INT_STATUS, 0);
 			//get response
@@ -149,13 +153,13 @@ static int ocsdc_finish(struct ocsdc * dev, struct mmc_cmd *cmd) {
 				cmd->response[2] = ocsdc_read(dev, OCSDC_RESPONSE_3);
 				cmd->response[3] = ocsdc_read(dev, OCSDC_RESPONSE_4);
 			}
-			printf("ocsdc_finish:  %d ok\n\r", cmd->cmdidx);
+			DBG_PRINTF("ocsdc_finish:  %d ok\n\r", cmd->cmdidx);
 			retval = 0;
 
 			break;
 		}
 		//else if (!(r2 & OCSDC_CMD_INT_STATUS_CIE)) {
-		//	printf("ocsdc_finish: cmd %d no exec %x\n", cmd->cmdidx, r2);
+		//	DBG_PRINTF("ocsdc_finish: cmd %d no exec %x\n", cmd->cmdidx, r2);
 		//}
 	}
 	return retval;
@@ -167,12 +171,12 @@ static int ocsdc_data_finish(struct ocsdc * dev) {
     while ((status = ocsdc_read(dev, OCSDC_DAT_INT_STATUS)) == 0);
     ocsdc_write(dev, OCSDC_DAT_INT_STATUS, 0);
 
-    if (status & SDCMSC_DAT_INT_STATUS_TRS) {
-    	printf("ocsdc_data_finish: ok\n\r");
+    if (status & OCSDC_INT_STATUS_CC) {
+    	DBG_PRINTF("ocsdc_data_finish: ok\n\r");
     	return 0;
     }
     else {
-    	printf("ocsdc_data_finish: status %x\n\r", status);
+    	DBG_PRINTF("ocsdc_data_finish: status %x\n\r", status);
     	return -1;
     }
 }
@@ -191,7 +195,7 @@ static void ocsdc_setup_data_xfer(struct ocsdc * dev, struct mmc_cmd *cmd, struc
 	ocsdc_write(dev, OCSDC_BLOCK_SIZE, data->blocksize-1);
 	ocsdc_write(dev, OCSDC_BLOCK_COUNT, data->blocks-1);
 
-	//printf("ocsdc_setup_read: addr: %x\n", (uint32_t)data->dest);
+	//DBG_PRINTF("ocsdc_setup_read: addr: %x\n", (uint32_t)data->dest);
 
 }
 
@@ -222,7 +226,7 @@ static int ocsdc_send_cmd(struct mmc *mmc, struct mmc_cmd *cmd, struct mmc_data 
 		ocsdc_setup_data_xfer(dev, cmd, data);
 	}
 
-	printf("ocsdc_send_cmd %04x\n\r", command);
+	DBG_PRINTF("ocsdc_send_cmd %04x\n\r", command);
 
 //	getc();
 
@@ -240,15 +244,16 @@ static int ocsdc_init(struct mmc *mmc)
 	struct ocsdc * dev = mmc->priv;
 
 	//set timeout
-	ocsdc_write(dev, OCSDC_TIMEOUT, 0x7FFF);
+	ocsdc_write(dev, OCSDC_CMD_TIMEOUT, 0x7FFF);
+	ocsdc_write(dev, OCSDC_DAT_TIMEOUT, 0xFFFFFF);
 	//disable all interrupts
 	ocsdc_write(dev, OCSDC_CMD_INT_ENABLE, 0);
 	ocsdc_write(dev, OCSDC_DAT_INT_ENABLE, 0);
 	//clear all interrupts
 	ocsdc_write(dev, OCSDC_CMD_INT_STATUS, 0);
 	ocsdc_write(dev, OCSDC_DAT_INT_STATUS, 0);
-	//set clock to maximum (devide by 2)
-	ocsdc_set_clock(dev, dev->clk_freq/2);
+	//set clock to divide by 4
+	ocsdc_set_clock(dev, dev->clk_freq/4);
 
 	return 0;
 }
@@ -263,40 +268,24 @@ static void ocsdc_set_ios(struct mmc *mmc)
 		ocsdc_set_clock(mmc->priv, mmc->clock);
 }
 
-struct mmc * ocsdc_mmc_init(int base_addr, int clk_freq)
+struct mmc * ocsdc_mmc_init(int base_addr, int clk_freq, unsigned int host_caps)
 {
-	struct mmc *mmc;
-	struct ocsdc *priv;
+	priv.iobase = base_addr;
+	priv.clk_freq = clk_freq;
 
-	mmc = malloc(sizeof(struct mmc));
-	if (!mmc) goto MMC_ALLOC;
-	priv = malloc(sizeof(struct ocsdc));
-	if (!priv) goto OCSDC_ALLOC;
+	sprintf(mmc.name, "ocsdc");
+	mmc.priv = &priv;
+	mmc.send_cmd = ocsdc_send_cmd;
+	mmc.set_ios = ocsdc_set_ios;
+	mmc.init = ocsdc_init;
+	mmc.getcd = NULL;
 
-	memset(mmc, 0, sizeof(struct mmc));
-	memset(priv, 0, sizeof(struct ocsdc));
+	mmc.f_min = priv.clk_freq/6; /*maximum clock division 64 */
+	mmc.f_max = priv.clk_freq/2; /*minimum clock division 2 */
+	mmc.voltages = MMC_VDD_32_33 | MMC_VDD_33_34;
+	mmc.host_caps = host_caps;
 
-	priv->iobase = base_addr;
-	priv->clk_freq = clk_freq;
+	mmc.b_max = 256;
 
-	sprintf(mmc->name, "ocsdc");
-	mmc->priv = priv;
-	mmc->send_cmd = ocsdc_send_cmd;
-	mmc->set_ios = ocsdc_set_ios;
-	mmc->init = ocsdc_init;
-	mmc->getcd = NULL;
-
-	mmc->f_min = priv->clk_freq/6; /*maximum clock division 64 */
-	mmc->f_max = priv->clk_freq/2; /*minimum clock division 2 */
-	mmc->voltages = MMC_VDD_32_33 | MMC_VDD_33_34;
-	mmc->host_caps = MMC_MODE_4BIT;//MMC_MODE_HS | MMC_MODE_HS_52MHz | MMC_MODE_4BIT;
-
-	mmc->b_max = 256;
-
-	return mmc;
-
-OCSDC_ALLOC:
-	free(mmc);
-MMC_ALLOC:
-	return NULL;
+	return &mmc;
 }

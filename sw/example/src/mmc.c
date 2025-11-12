@@ -26,15 +26,14 @@
 #include "mmc.h"
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
-void udelay(int t) {
-#define US_DELAY 100
-	volatile int us = US_DELAY;
-	while(t--) {
-		us = US_DELAY;
-		while(us--);
-	}
-}
+#ifndef MMC_DEBUG
+#define DBG_PRINTF(...)
+#else
+extern int dd_printf(const char *__restrict fmt, ...);
+#define DBG_PRINTF dd_printf
+#endif
 
 /* frequency bases */
 /* divided by 10 to be nice to platforms without floating point */
@@ -106,7 +105,7 @@ static int mmc_go_idle(struct mmc* mmc)
 	struct mmc_cmd cmd;
 	int err;
 
-	udelay(1000);
+	usleep(1000);
 
 	cmd.cmdidx = MMC_CMD_GO_IDLE_STATE;
 	cmd.cmdarg = 0;
@@ -117,7 +116,7 @@ static int mmc_go_idle(struct mmc* mmc)
 	if (err)
 		return err;
 
-	udelay(2000);
+	usleep(2000);
 
 	return 0;
 }
@@ -181,7 +180,7 @@ static int sd_send_op_cond(struct mmc *mmc)
 		if (err)
 			return err;
 
-		udelay(1000);
+		usleep(1000);
 	} while ((!(cmd.response[0] & OCR_BUSY)) && timeout--);
 
 	if (timeout <= 0)
@@ -191,6 +190,8 @@ static int sd_send_op_cond(struct mmc *mmc)
 		mmc->version = SD_VERSION_1_0;
 
 	mmc->ocr = cmd.response[0];
+
+	DBG_PRINTF("OCR: %08x\n\r", mmc->ocr);
 
 	mmc->high_capacity = ((mmc->ocr & OCR_HCS) == OCR_HCS);
 	mmc->rca = 0;
@@ -217,7 +218,7 @@ static int mmc_send_op_cond(struct mmc *mmc)
  	if (err)
  		return err;
 
- 	udelay(1000);
+ 	usleep(1000);
 
 	do {
 		cmd.cmdidx = MMC_CMD_SEND_OP_COND;
@@ -235,7 +236,7 @@ static int mmc_send_op_cond(struct mmc *mmc)
 		if (err)
 			return err;
 
-		udelay(1000);
+		usleep(1000);
 	} while (!(cmd.response[0] & OCR_BUSY) && timeout--);
 
 	if (timeout <= 0)
@@ -267,19 +268,19 @@ static int mmc_send_status(struct mmc *mmc, int timeout)
 			     MMC_STATE_PRG)
 				break;
 			else if (cmd.response[0] & MMC_STATUS_MASK) {
-				printf("Status Error: 0x%08X\n\r",
+				DBG_PRINTF("Status Error: 0x%08X\n\r",
 					cmd.response[0]);
 				return COMM_ERR;
 			}
 		} else if (--retries < 0)
 			return err;
 
-		udelay(1000);
+		usleep(1000);
 
 	} while (timeout--);
 
 	if (timeout <= 0) {
-		printf("Timeout waiting card ready\n\r");
+		DBG_PRINTF("Timeout waiting card ready\n\r");
 		return TIMEOUT;
 	}
 
@@ -391,11 +392,11 @@ retry_scr:
 		return err;
 	}
 
-	mmc->scr[0] = scr[0];
-	mmc->scr[1] = scr[1];
+	mmc->scr[0] = __builtin_bswap32(scr[0]);
+	mmc->scr[1] = __builtin_bswap32(scr[1]);
 
-	printf("SCR: %08x\n\r", mmc->scr[0]);
-	printf("     %08x\n\r", mmc->scr[1]);
+	DBG_PRINTF("SCR: %08x\n\r", mmc->scr[0]);
+	DBG_PRINTF("     %08x\n\r", mmc->scr[1]);
 
 	switch ((mmc->scr[0] >> 24) & 0xf) {
 		case 0:
@@ -427,16 +428,16 @@ retry_scr:
 		if (err)
 			return err;
 
-		printf("switch status 7 %08x\n\r", switch_status[7]);
-		printf("switch status 3 %08x\n\r", switch_status[3]);
-		printf("switch status 4 %08x\n\r", switch_status[4]);
+		DBG_PRINTF("switch status 7 %08x\n\r", switch_status[7]);
+		DBG_PRINTF("switch status 3 %08x\n\r", switch_status[3]);
+		DBG_PRINTF("switch status 4 %08x\n\r", switch_status[4]);
 		/* The high-speed function is busy.  Try again */
-		if (!(switch_status[7] & SD_HIGHSPEED_BUSY))
+		if (!(__builtin_bswap32(switch_status[7]) & SD_HIGHSPEED_BUSY))
 			break;
 	}
 
 	/* If high-speed isn't supported, we return */
-	if (!(switch_status[3] & SD_HIGHSPEED_SUPPORTED))
+	if (!(__builtin_bswap32(switch_status[3]) & SD_HIGHSPEED_SUPPORTED))
 		return 0;
 
 	/*
@@ -454,7 +455,7 @@ retry_scr:
 	if (err)
 		return err;
 
-	if ((switch_status[4] & 0x0f000000) == 0x01000000)
+	if ((__builtin_bswap32(switch_status[4]) & 0x0f000000) == 0x01000000)
 		mmc->card_caps |= MMC_MODE_HS;
 
 	return 0;
@@ -507,7 +508,8 @@ static int mmc_startup(struct mmc *mmc)
 {
 	int err, width;
 	uint mult, freq;
-	uint cmult, csize, capacity;
+	uint cmult, csize;
+    uint64_t capacity;
 	struct mmc_cmd cmd;
 	char ext_csd[512];
 	char test_csd[512];
@@ -794,7 +796,7 @@ static int mmc_read_blocks(struct mmc *mmc, void *dst, size_t start, size_t blkc
 		cmd.cmdarg = 0;
 		cmd.resp_type = MMC_RSP_R1b;
 		if (mmc_send_cmd(mmc, &cmd, NULL)) {
-			printf("mmc fail to send stop cmd\n");
+			DBG_PRINTF("mmc fail to send stop cmd\n");
 			return 0;
 		}
 	}
@@ -837,7 +839,7 @@ int mmc_init(struct mmc *mmc)
 		err = mmc_send_op_cond(mmc);
 
 		if (err) {
-			printf("Card did not respond to voltage select!\n\r");
+			DBG_PRINTF("Card did not respond to voltage select!\n\r");
 			return UNUSABLE_ERR;
 		}
 	}
@@ -858,7 +860,7 @@ size_t mmc_bread(struct mmc *mmc, size_t start, size_t blkcnt, void *dst)
 		return 0;
 
 	if ((start + blkcnt) > mmc->capacity / mmc->read_bl_len) {
-		printf("MMC: block number 0x%lx exceeds max(0x%lx)\n",
+		DBG_PRINTF("MMC: block number 0x%lx exceeds max(0x%lx)\n",
 			start + blkcnt, mmc->capacity / mmc->read_bl_len);
 		return 0;
 	}
@@ -880,24 +882,102 @@ size_t mmc_bread(struct mmc *mmc, size_t start, size_t blkcnt, void *dst)
 
 void print_mmcinfo(struct mmc *mmc)
 {
-	printf("Device: %s\n\r", mmc->name);
-	printf("Manufacturer ID: %x\n\r", mmc->cid[0] >> 24);
-	printf("OEM: %x\n\r", (mmc->cid[0] >> 8) & 0xffff);
-	printf("Name: %c%c%c%c%c \n\r", mmc->cid[0] & 0xff,
+	DBG_PRINTF("Device: %s\n\r", mmc->name);
+	DBG_PRINTF("Manufacturer ID: %x\n\r", mmc->cid[0] >> 24);
+	DBG_PRINTF("OEM: %x\n\r", (mmc->cid[0] >> 8) & 0xffff);
+	DBG_PRINTF("Name: %c%c%c%c%c \n\r", mmc->cid[0] & 0xff,
 			(mmc->cid[1] >> 24), (mmc->cid[1] >> 16) & 0xff,
 			(mmc->cid[1] >> 8) & 0xff, mmc->cid[1] & 0xff);
 
-	printf("Tran Speed: %d\n\r", mmc->tran_speed);
-	printf("Rd Block Len: %d\n\r", mmc->read_bl_len);
+	DBG_PRINTF("Tran Speed: %d\n\r", mmc->tran_speed);
+	DBG_PRINTF("Rd Block Len: %d\n\r", mmc->read_bl_len);
 
-	printf("%s version %d.%d\n\r", IS_SD(mmc) ? "SD" : "MMC",
+	DBG_PRINTF("%s version %d.%d\n\r", IS_SD(mmc) ? "SD" : "MMC",
 			(mmc->version >> 4) & 0xf, mmc->version & 0xf);
 
-	printf("High Capacity: %s\n\r", mmc->high_capacity ? "Yes" : "No");
-	printf("Capacity: %ld\n\r", mmc->capacity);
+	DBG_PRINTF("High Capacity: %s\n\r", mmc->high_capacity ? "Yes" : "No");
+	DBG_PRINTF("Capacity: %lu MB\n\r", mmc->capacity>>20);
 
-	printf("Bus Width: %d-bit\n\r", mmc->bus_width);
+	DBG_PRINTF("Bus Width: %d-bit\n\r", mmc->bus_width);
 }
 
+size_t mmc_write_blocks(struct mmc *mmc, size_t start, size_t blkcnt, const void *src)
+{
+	struct mmc_cmd cmd;
+	struct mmc_data data;
+	int timeout = 1000;
 
+	if ((start + blkcnt) > mmc->capacity / mmc->write_bl_len) {
+		DBG_PRINTF("MMC: block number 0x%lx exceeds max(0x%lx)\n",
+			start + blkcnt, mmc->capacity / mmc->write_bl_len);
+		return 0;
+	}
 
+	if (blkcnt > 1)
+		cmd.cmdidx = MMC_CMD_WRITE_MULTIPLE_BLOCK;
+	else
+		cmd.cmdidx = MMC_CMD_WRITE_SINGLE_BLOCK;
+
+	if (mmc->high_capacity)
+		cmd.cmdarg = start;
+	else
+		cmd.cmdarg = start * mmc->write_bl_len;
+
+	cmd.resp_type = MMC_RSP_R1;
+	//cmd.flags = 0;
+
+	data.src = src;
+	data.blocks = blkcnt;
+	data.blocksize = mmc->write_bl_len;
+	data.flags = MMC_DATA_WRITE;
+
+	if (mmc_send_cmd(mmc, &cmd, &data)) {
+		DBG_PRINTF("mmc write failed\n");
+		return 0;
+	}
+
+	/* SPI multiblock writes terminate using a special
+	 * token, not a STOP_TRANSMISSION request.
+	 */
+//	if (!mmc_host_is_spi(mmc) && blkcnt > 1) {
+	if (blkcnt > 1) { // We are not using SPI
+
+		cmd.cmdidx = MMC_CMD_STOP_TRANSMISSION;
+		cmd.cmdarg = 0;
+		cmd.resp_type = MMC_RSP_R1b;
+		//cmd.flags = 0;
+		if (mmc_send_cmd(mmc, &cmd, NULL)) {
+			DBG_PRINTF("mmc fail to send stop cmd\n");
+			return 0;
+		}
+	}
+
+	/* Waiting for the ready status */
+	if (mmc_send_status(mmc, timeout))
+		return 0;
+
+	return blkcnt;
+}
+
+size_t mmc_bwrite(struct mmc *mmc, size_t start, size_t blkcnt, const void *src)
+{
+	size_t cur, blocks_todo = blkcnt;
+
+	//struct mmc *mmc = find_mmc_device(dev_num);
+	if (!mmc)
+		return 0;
+
+	if (mmc_set_blocklen(mmc, mmc->write_bl_len))
+		return 0;
+
+	do {
+		cur = (blocks_todo > mmc->b_max) ?  mmc->b_max : blocks_todo;
+		if(mmc_write_blocks(mmc, start, cur, src) != cur)
+			return 0;
+		blocks_todo -= cur;
+		start += cur;
+		src += cur * mmc->write_bl_len;
+	} while (blocks_todo > 0);
+
+	return blkcnt;
+}
