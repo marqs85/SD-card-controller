@@ -70,7 +70,7 @@ input [39:0] cmd_i;
 input start_i;
 input cmd_dat_i;
 //---------------Output ports---------------
-output reg [119:0] response_o;
+output [119:0] response_o;
 output reg finish_o;
 output reg crc_ok_o;
 output reg index_ok_o;
@@ -85,11 +85,11 @@ parameter RESP_SIZE = 128;
 
 //---------------Internal variable-----------
 reg cmd_dat_reg;
-integer resp_len;
+reg [6:0] resp_len;
 reg with_response;
 reg [CMD_SIZE-1:0] cmd_buff;
 reg [RESP_SIZE-1:0] resp_buff;
-integer resp_idx;
+reg [7:0] resp_idx;
 //CRC
 reg crc_rst;
 reg [6:0]crc_in;
@@ -98,7 +98,7 @@ reg crc_enable;
 reg crc_bit;
 reg crc_ok;
 //-Internal Counterns
-integer counter;
+reg [7:0] counter;
 //-State Machine
 parameter STATE_SIZE = 7;
 parameter
@@ -113,7 +113,7 @@ parameter
 reg [STATE_SIZE-1:0] state;
 reg [STATE_SIZE-1:0] next_state;
 //Misc
-`define cmd_idx  (CMD_SIZE-1-counter) 
+`define cmd_idx  (CMD_SIZE-1-counter)
 
 //sd cmd input pad register
 always @(posedge sd_clk)
@@ -177,7 +177,7 @@ begin: FSM_COMBO
             end
         FINISH_WR:
             next_state = IDLE;
-        default: 
+        default:
             next_state = INIT;
     endcase
 end
@@ -222,7 +222,7 @@ begin: FSM_OUT
         crc_rst <= 1;
         crc_bit <= 0;
         crc_in <= 0;
-        response_o <= 0;
+        //response_o <= 0;
         index_ok_o <= 0;
         crc_ok_o <= 0;
         crc_ok <= 0;
@@ -240,7 +240,7 @@ begin: FSM_OUT
                 counter <= 0;
                 crc_rst <= 1;
                 crc_enable <= 0;
-                response_o <= 0;
+                //response_o <= 0;
                 resp_idx <= 0;
                 crc_ok_o <= 0;
                 index_ok_o <= 0;
@@ -325,11 +325,13 @@ begin: FSM_OUT
                 crc_rst <= 1;
                 counter <= 0;
                 cmd_oe_o <= 0;
-                response_o <= resp_buff[119:0];
+                //response_o <= resp_buff[119:0];
             end
         endcase
     end
 end
+
+assign response_o = resp_buff[119:0];
 
 endmodule
 
