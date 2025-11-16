@@ -10,7 +10,7 @@
 ////                                                              ////
 //// Description                                                  ////
 //// Clock synchronisation beetween two clock domains.            ////
-//// Assumption is that input signal duration is always           //// 
+//// Assumption is that input signal duration is always           ////
 //// one clk_a clock period. If that is true output signal        ////
 //// duration is always one clk_b clock period.                   ////
 ////                                                              ////
@@ -44,16 +44,18 @@
 ////                                                              ////
 //////////////////////////////////////////////////////////////////////
 
+`include "sdc_controller.vh"
+
 module monostable_domain_cross(
     input rst,
     input clk_a,
-    input in, 
+    input in,
     input clk_b,
     output out
 );
 
 // this changes level when the in is seen in clk_a
-reg toggle_clk_a;
+reg toggle_clk_a /* synthesis noprune */;
 always @(posedge clk_a or posedge rst)
 begin
     if (rst)
@@ -62,6 +64,28 @@ begin
         toggle_clk_a <= toggle_clk_a ^ in;
 end
 
+`ifdef ALTERA_CDC_SYNC
+wire [2:0] sync_clk_b;
+reg synced_q;
+
+altera_std_synchronizer #(
+    .depth          (2)
+) u_altera_std_sync (
+    .clk            (clk_b),
+    .reset_n        (~rst),
+    .din            (toggle_clk_a),
+    .dout           (sync_clk_b[1])
+);
+
+always @(posedge clk_b or posedge rst) begin
+    if (rst)
+        synced_q <= 0;
+    else
+        synced_q <= sync_clk_b[1];
+end
+
+assign sync_clk_b[2] = synced_q;
+`else
 // which can then be sync-ed to clk_b
 reg [2:0] sync_clk_b;
 always @(posedge clk_b or posedge rst)
@@ -71,8 +95,9 @@ begin
     else
         sync_clk_b <= {sync_clk_b[1:0], toggle_clk_a};
 end
+`endif
 
 // and recreate the flag in clk_b
 assign out = (sync_clk_b[2] ^ sync_clk_b[1]);
 
-endmodule 
+endmodule
